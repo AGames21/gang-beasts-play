@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gang Beasts Browser</title>
+<style>
+html,body{margin:0;height:100%;background:#17191e;color:#ddd;font-family:Arial,sans-serif;overflow:hidden}
+#wrap{width:min(1440px,96vw,calc((100vh - 48px)*16/9));margin:0 auto}
+canvas{display:block;width:100%;aspect-ratio:16/9;background:#111}
+#bar{display:flex;align-items:center;gap:12px;height:40px;font-size:14px}
+#bar span{flex:1}
+#progress{height:4px;background:#333}#fill{height:100%;width:0;background:#e8a33c}
+button{background:#2a2d35;color:#ddd;border:1px solid #444;padding:4px 10px;cursor:pointer}
+#msg{padding:8px;color:#f88;display:none}
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" width="1280" height="720" tabindex="-1"></canvas>
+  <div id="progress"><div id="fill"></div></div>
+  <div id="msg"></div>
+  <div id="bar"><span>Gang Beasts Browser Reconstruction (incomplete, unofficial)</span><button id="full">Fullscreen</button></div>
+</div>
+<script>
+// The game files stay on the home server; this page only loads them.
+var HOST = "https://gangbeasts.agamer21.kozow.com";
+var RELEASE = new URLSearchParams(location.search).get("build") || "22e9e869b139d1ac";
+if (!/^[a-f0-9]{16}$/.test(RELEASE)) RELEASE = "22e9e869b139d1ac";
+var base = HOST + "/releases/" + RELEASE;
+var q = "?build=" + RELEASE;
+
+// Online rooms: the build connects to <page host>/ws, so send it to the home relay instead.
+var NativeWebSocket = window.WebSocket;
+window.WebSocket = function (url, protocols) {
+  var u = new URL(url, location.href);
+  if (u.host === location.host && u.pathname.indexOf("/ws") === 0)
+    url = "wss://" + new URL(HOST).host + u.pathname + u.search;
+  return protocols === undefined ? new NativeWebSocket(url) : new NativeWebSocket(url, protocols);
+};
+window.WebSocket.prototype = NativeWebSocket.prototype;
+["CONNECTING", "OPEN", "CLOSING", "CLOSED"].forEach(function (k) { window.WebSocket[k] = NativeWebSocket[k]; });
+
+function fail(text) { var m = document.getElementById("msg"); m.textContent = text; m.style.display = "block"; }
+var canvas = document.getElementById("game");
+canvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+
+var script = document.createElement("script");
+script.src = base + "/Build/original-menu-webgl.loader.js" + q;
+script.onerror = function () { fail("Could not reach the game server. It may be offline."); };
+script.onload = function () {
+  createUnityInstance(canvas, {
+    dataUrl: base + "/Build/original-menu-webgl.data" + q,
+    frameworkUrl: base + "/Build/original-menu-webgl.framework.js" + q,
+    codeUrl: base + "/Build/original-menu-webgl.wasm" + q,
+    streamingAssetsUrl: base + "/StreamingAssets",
+    companyName: "DefaultCompany",
+    productName: "Gang Beasts Browser Reconstruction",
+    productVersion: "1.0",
+    cacheControl: function () { return "immutable"; },
+    showBanner: function (text, type) { if (type === "error") fail(text); }
+  }, function (p) { document.getElementById("fill").style.width = 100 * p + "%"; })
+  .then(function (unity) {
+    document.getElementById("progress").style.display = "none";
+    document.getElementById("full").onclick = function () { unity.SetFullscreen(1); };
+  })
+  .catch(function (e) { fail(String(e)); });
+};
+document.body.appendChild(script);
+</script>
+</body>
+</html>
