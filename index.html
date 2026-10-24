@@ -7,66 +7,182 @@
 <style>
 html,body{margin:0;height:100%;background:#17191e;color:#ddd;font-family:Arial,sans-serif;overflow:hidden}
 #wrap{width:min(1440px,96vw,calc((100vh - 48px)*16/9));margin:0 auto}
-canvas{display:block;width:100%;aspect-ratio:16/9;background:#111}
+canvas{display:none;width:100%;aspect-ratio:16/9;background:#111}
 #bar{display:flex;align-items:center;gap:12px;height:40px;font-size:14px}
 #bar span{flex:1}
 #progress{height:4px;background:#333}#fill{height:100%;width:0;background:#e8a33c}
-button{background:#2a2d35;color:#ddd;border:1px solid #444;padding:4px 10px;cursor:pointer}
+button,.file{background:#2a2d35;color:#ddd;border:1px solid #444;padding:4px 10px;cursor:pointer;font:inherit}
+.file input{display:none}
+.primary{background:#e8a33c;color:#111;border-color:#e8a33c;font-weight:bold;padding:10px 18px}
 #msg{padding:8px;color:#f88;display:none}
+#loader{max-width:640px;margin:8vh auto 0;padding:24px;border:2px dashed #444;border-radius:8px;line-height:1.5}
+#loader.over{border-color:#e8a33c}
+#loader h1{margin:0 0 8px;font-size:22px}
+#loader a{color:#e8a33c}
+#saved div{display:flex;align-items:center;gap:8px;margin:6px 0}
+#saved code{flex:1}
+#status{color:#aaa;min-height:1.5em}
 </style>
 </head>
 <body>
-<div id="wrap">
+<div id="loader">
+  <h1>Gang Beasts Browser</h1>
+  <p>Load the game once from a release zip and it stays saved in this browser. Download the newest zip from
+    <a href="https://github.com/AGames21/gang-beasts-releases/releases" target="_blank" rel="noopener">the releases page</a>
+    (sign in to GitHub first), then pick it here or drop it on this box.</p>
+  <p><label class="file primary">Load release zip<input id="pick" type="file" accept=".zip,application/zip"></label></p>
+  <p id="status"></p>
+  <div id="saved"></div>
+  <p style="color:#888;font-size:13px">Stages: add <code>?stage=Girders</code>, <code>Towers</code>, <code>Wheel</code> or <code>Crane</code> to the address. <code>?build=&lt;id&gt;</code> picks a saved release.</p>
+</div>
+<div id="wrap" style="display:none">
   <canvas id="game" width="1280" height="720" tabindex="-1"></canvas>
   <div id="progress"><div id="fill"></div></div>
   <div id="msg"></div>
-  <div id="bar"><span>Gang Beasts Browser Reconstruction (incomplete, unofficial)</span><button id="full">Fullscreen</button></div>
+  <div id="bar" style="display:none"><span>Gang Beasts Browser Reconstruction (incomplete, unofficial)</span><button id="other">Releases</button><button id="full">Fullscreen</button></div>
 </div>
+<script src="fflate.min.js"></script>
 <script>
-// The game files stay on the home server; this page only loads them.
-var HOST = "https://gangbeasts.agamer21.kozow.com";
-var RELEASE = new URLSearchParams(location.search).get("build") || "22e9e869b139d1ac";
-if (!/^[a-f0-9]{16}$/.test(RELEASE)) RELEASE = "22e9e869b139d1ac";
-var base = HOST + "/releases/" + RELEASE;
-var q = "?build=" + RELEASE;
+// The game files never touch this site. The player loads a release zip; its files go into Cache Storage
+// and sw.js serves them back under ./local/<id>/.
+var CACHE = "gb-releases", RELAY = "gangbeasts.agamer21.kozow.com";
+var params = new URLSearchParams(location.search);
+var $ = function (id) { return document.getElementById(id); };
+function fail(text) { var m = $("msg"); m.textContent = text; m.style.display = "block"; }
+function status(text) { $("status").textContent = text; }
+function local(path) { return new URL("local/" + path, location.href).href; }
 
 // Online rooms: the build connects to <page host>/ws, so send it to the home relay instead.
 var NativeWebSocket = window.WebSocket;
 window.WebSocket = function (url, protocols) {
   var u = new URL(url, location.href);
-  if (u.host === location.host && u.pathname.indexOf("/ws") === 0)
-    url = "wss://" + new URL(HOST).host + u.pathname + u.search;
+  if (u.host === location.host && u.pathname.indexOf("/ws") === 0) url = "wss://" + RELAY + u.pathname + u.search;
   return protocols === undefined ? new NativeWebSocket(url) : new NativeWebSocket(url, protocols);
 };
 window.WebSocket.prototype = NativeWebSocket.prototype;
 ["CONNECTING", "OPEN", "CLOSING", "CLOSED"].forEach(function (k) { window.WebSocket[k] = NativeWebSocket[k]; });
 
-function fail(text) { var m = document.getElementById("msg"); m.textContent = text; m.style.display = "block"; }
-var canvas = document.getElementById("game");
-canvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+function worker() {
+  if (!("serviceWorker" in navigator)) return Promise.reject(new Error("This browser cannot store the game (no service workers)."));
+  return navigator.serviceWorker.register("sw.js").then(function () { return navigator.serviceWorker.ready; }).then(function () {
+    if (navigator.serviceWorker.controller) return;
+    return new Promise(function (done) { navigator.serviceWorker.addEventListener("controllerchange", done, { once: true }); });
+  });
+}
 
-var script = document.createElement("script");
-script.src = base + "/Build/original-menu-webgl.loader.js" + q;
-script.onerror = function () { fail("Could not reach the game server. It may be offline."); };
-script.onload = function () {
-  createUnityInstance(canvas, {
-    dataUrl: base + "/Build/original-menu-webgl.data" + q,
-    frameworkUrl: base + "/Build/original-menu-webgl.framework.js" + q,
-    codeUrl: base + "/Build/original-menu-webgl.wasm" + q,
-    streamingAssetsUrl: base + "/StreamingAssets",
-    companyName: "DefaultCompany",
-    productName: "Gang Beasts Browser Reconstruction",
-    productVersion: "1.0",
-    cacheControl: function () { return "immutable"; },
-    showBanner: function (text, type) { if (type === "error") fail(text); }
-  }, function (p) { document.getElementById("fill").style.width = 100 * p + "%"; })
-  .then(function (unity) {
-    document.getElementById("progress").style.display = "none";
-    document.getElementById("full").onclick = function () { unity.SetFullscreen(1); };
-  })
-  .catch(function (e) { fail(String(e)); });
-};
-document.body.appendChild(script);
+// Saved releases, newest first.
+function saved() {
+  return caches.open(CACHE).then(function (cache) { return cache.keys(); }).then(function (keys) {
+    var infos = keys.filter(function (r) { return /\/local\/[a-f0-9]{16}\/release\.json$/.test(r.url); });
+    return Promise.all(infos.map(function (r) { return caches.match(r).then(function (res) { return res.json(); }); }));
+  }).then(function (list) { return list.sort(function (a, b) { return (b.loaded || 0) - (a.loaded || 0); }); });
+}
+
+function remove(id) {
+  return caches.open(CACHE).then(function (cache) {
+    return cache.keys().then(function (keys) {
+      return Promise.all(keys.filter(function (r) { return r.url.indexOf("/local/" + id + "/") >= 0; }).map(function (r) { return cache.delete(r); }));
+    });
+  });
+}
+
+function showSaved(list) {
+  var box = $("saved"); box.textContent = "";
+  list.forEach(function (info) {
+    var row = document.createElement("div");
+    var name = document.createElement("code"); name.textContent = info.id + (info.title ? "  " + info.title : "");
+    var play = document.createElement("button"); play.textContent = "Play";
+    play.onclick = function () { params.set("build", info.id); location.search = params.toString(); };
+    var del = document.createElement("button"); del.textContent = "Remove";
+    del.onclick = function () { remove(info.id).then(saved).then(showSaved); };
+    row.append(name, play, del); box.appendChild(row);
+  });
+}
+
+function unzip(bytes) {
+  return new Promise(function (done, reject) { fflate.unzip(bytes, function (err, files) { err ? reject(err) : done(files); }); });
+}
+
+// Accepts the zips from the releases repo: <id>/release.json, <id>/Build/..., <id>/StreamingAssets/...
+function store(file) {
+  status("Reading " + file.name + "...");
+  return file.arrayBuffer().then(function (buf) { status("Unpacking..."); return unzip(new Uint8Array(buf)); }).then(function (files) {
+    var names = Object.keys(files).filter(function (n) { return !n.endsWith("/"); });
+    var info = names.filter(function (n) { return /^[a-f0-9]{16}\/release\.json$/.test(n); })[0];
+    if (!info) throw new Error("That zip is not a Gang Beasts release (no <id>/release.json).");
+    var id = info.split("/")[0];
+    var meta = JSON.parse(new TextDecoder().decode(files[info]));
+    if (meta.id !== id) throw new Error("release.json does not match its folder.");
+    names = names.filter(function (n) { return n.indexOf(id + "/") === 0 && n.split("/").indexOf("..") < 0 && n !== info; });
+    if (names.indexOf(id + "/Build/original-menu-webgl.loader.js") < 0) throw new Error("The zip has no game loader.");
+    return remove(id).then(function () { return caches.open(CACHE); }).then(function (cache) {
+      var done = 0;
+      return names.reduce(function (p, n) {
+        return p.then(function () {
+          var body = files[n]; delete files[n];
+          return cache.put(local(n), new Response(body, { headers: { "Content-Length": String(body.length) } })).then(function () {
+            status("Saving files " + (++done) + "/" + names.length);
+          });
+        });
+      }, Promise.resolve()).then(function () {
+        meta.loaded = Date.now();
+        return cache.put(local(info), new Response(JSON.stringify(meta), { headers: { "Content-Type": "application/json" } }));
+      });
+    }).then(function () { return id; });
+  });
+}
+
+function load(file) {
+  store(file).then(function (id) {
+    if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+    params.set("build", id); location.search = params.toString();
+  }).catch(function (e) { status(""); fail(e.message || String(e)); });
+}
+
+function play(id) {
+  $("loader").style.display = "none"; $("wrap").style.display = "block"; $("game").style.display = "block"; $("bar").style.display = "flex";
+  var base = local(id);
+  var canvas = $("game");
+  canvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+  var script = document.createElement("script");
+  script.src = base + "/Build/original-menu-webgl.loader.js";
+  script.onerror = function () { fail("The saved release is missing its loader. Load the zip again."); };
+  script.onload = function () {
+    createUnityInstance(canvas, {
+      dataUrl: base + "/Build/original-menu-webgl.data",
+      frameworkUrl: base + "/Build/original-menu-webgl.framework.js",
+      codeUrl: base + "/Build/original-menu-webgl.wasm",
+      streamingAssetsUrl: base + "/StreamingAssets",
+      companyName: "DefaultCompany",
+      productName: "Gang Beasts Browser Reconstruction",
+      productVersion: "1.0",
+      // Already stored locally; Unity's own IndexedDB cache would only double the space used.
+      cacheControl: function () { return "no-store"; },
+      showBanner: function (text, type) { if (type === "error") fail(text); }
+    }, function (p) { $("fill").style.width = 100 * p + "%"; })
+    .then(function (unity) {
+      $("progress").style.display = "none";
+      $("full").onclick = function () { unity.SetFullscreen(1); };
+    })
+    .catch(function (e) { fail(String(e)); });
+  };
+  document.body.appendChild(script);
+}
+
+$("other").onclick = function () { params.set("pick", ""); location.search = params.toString(); };
+$("pick").onchange =function () { if (this.files[0]) load(this.files[0]); };
+var zone = $("loader");
+zone.ondragover = function (e) { e.preventDefault(); zone.classList.add("over"); };
+zone.ondragleave = function () { zone.classList.remove("over"); };
+zone.ondrop = function (e) { e.preventDefault(); zone.classList.remove("over"); if (e.dataTransfer.files[0]) load(e.dataTransfer.files[0]); };
+
+worker().then(saved).then(function (list) {
+  showSaved(list);
+  var want = params.get("build");
+  var pick = list.filter(function (r) { return r.id === want; })[0] || (want ? null : list[0]);
+  if (want && !pick) status("Release " + want + " is not saved in this browser. Load its zip.");
+  if (pick && !params.has("pick")) play(pick.id);
+}).catch(function (e) { fail(e.message || String(e)); });
 </script>
 </body>
 </html>

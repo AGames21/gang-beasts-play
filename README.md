@@ -1,9 +1,13 @@
 # Gang Beasts Browser (GitHub Pages launcher)
 
-Play: https://agames21.github.io/gang-beasts-play/
+https://agames21.github.io/gang-beasts-play/
 
-This repository holds only the launcher page. The game build (Unity WebGL data, code and assets) is not stored here: the page loads it from the home server at `gangbeasts.agamer21.kozow.com`, and online rooms use that server's relay. If the home server is offline, the page shows an error.
+This site holds code only: the launcher page, a service worker and the fflate unzip library (MIT, Arjun Barrett).
+No game files are hosted here or on any server.
 
-`?build=<16-hex release id>` picks a specific release on the server. The default is the current public release.
+1. Download a release zip from the private repo AGames21/gang-beasts-releases (Releases tab, signed in to GitHub).
+2. Open the page and pick or drop the zip. It is unpacked into this browser's Cache Storage and stays there.
+3. Play. `?stage=Girders|Towers|Wheel|Crane` opens a stage sandbox, `?build=<id>` picks a saved release,
+   and the Releases button returns to the loader to add or remove releases.
 
-This is an incomplete, unofficial browser reconstruction, not a finished port.
+Online rooms still use the relay at wss://gangbeasts.agamer21.kozow.com/ws (a relay only, no game files).
