@@ -14,43 +14,64 @@ canvas{display:none;width:100%;aspect-ratio:16/9;background:#111}
 button,.file{background:#2a2d35;color:#ddd;border:1px solid #444;padding:4px 10px;cursor:pointer;font:inherit}
 .file input{display:none}
 .primary{background:#e8a33c;color:#111;border-color:#e8a33c;font-weight:bold;padding:10px 18px}
-#msg{padding:8px;color:#f88;display:none}
-#loader{max-width:640px;margin:8vh auto 0;padding:24px;border:2px dashed #444;border-radius:8px;line-height:1.5}
+#msg,#error{padding:8px;color:#f88;display:none}
+#loader{max-width:640px;margin:6vh auto 0;padding:24px;border:2px dashed #444;border-radius:8px;line-height:1.5;max-height:86vh;overflow:auto;box-sizing:border-box}
 #loader.over{border-color:#e8a33c}
 #loader h1{margin:0 0 8px;font-size:22px}
 #loader a{color:#e8a33c}
+#loader ol{padding-left:20px}
+#token{width:100%;box-sizing:border-box;padding:8px;background:#111;color:#ddd;border:1px solid #444;font:inherit;margin:4px 0 8px}
 #saved div{display:flex;align-items:center;gap:8px;margin:6px 0}
 #saved code{flex:1}
 #status{color:#aaa;min-height:1.5em}
+#dl{height:6px;background:#333;display:none}#dlfill{height:100%;width:0;background:#e8a33c}
+details{margin-top:12px;color:#999;font-size:14px}
 </style>
 </head>
 <body>
 <div id="loader">
   <h1>Gang Beasts Browser</h1>
-  <p>Load the game once from a release zip and it stays saved in this browser. Download the newest zip from
-    <a href="https://github.com/AGames21/gang-beasts-releases/releases" target="_blank" rel="noopener">the releases page</a>
-    (sign in to GitHub first), then pick it here or drop it on this box.</p>
-  <p><label class="file primary">Load release zip<input id="pick" type="file" accept=".zip,application/zip"></label></p>
+  <div id="signin" style="display:none">
+    <p>The game is kept in a private GitHub repo, so this page needs a read-only GitHub key once per browser. It downloads the newest build (about 77 MB, once) and keeps it here.</p>
+    <ol>
+      <li>Signed in as AGames21, open <a id="newtoken" href="https://github.com/settings/personal-access-tokens/new?name=Gang%20Beasts%20player&amp;description=Read-only%20key%20for%20the%20Gang%20Beasts%20browser%20player&amp;target_name=AGames21&amp;expires_in=365&amp;contents=read" target="_blank" rel="noopener">New fine-grained token</a>.</li>
+      <li>Under <b>Repository access</b> choose <b>Only select repositories</b> and pick <b>gang-beasts-browser</b>.</li>
+      <li>Under <b>Permissions</b>, set <b>Contents</b> to <b>Read-only</b> (nothing else). Generate it and copy it.</li>
+    </ol>
+    <input id="token" type="password" placeholder="Paste the token (github_pat_...)" autocomplete="off" spellcheck="false">
+    <button id="save" class="primary">Save and play</button>
+  </div>
   <p id="status"></p>
+  <div id="dl"><div id="dlfill"></div></div>
+  <div id="error"></div>
   <div id="saved"></div>
-  <p style="color:#888;font-size:13px">Stages: add <code>?stage=Girders</code>, <code>Towers</code>, <code>Wheel</code> or <code>Crane</code> to the address. <code>?build=&lt;id&gt;</code> picks a saved release.</p>
+  <details>
+    <summary>More</summary>
+    <p>Stages: add <code>?stage=Girders</code>, <code>Towers</code>, <code>Wheel</code> or <code>Crane</code> to the address. <code>?build=&lt;id&gt;</code> picks a saved build.</p>
+    <p><label class="file">Load a release zip instead<input id="pick" type="file" accept=".zip,application/zip"></label> (or drop it on this box)</p>
+    <p><button id="forget">Forget the GitHub key</button></p>
+  </details>
 </div>
 <div id="wrap" style="display:none">
   <canvas id="game" width="1280" height="720" tabindex="-1"></canvas>
   <div id="progress"><div id="fill"></div></div>
   <div id="msg"></div>
-  <div id="bar" style="display:none"><span>Gang Beasts Browser Reconstruction (incomplete, unofficial)</span><button id="other">Releases</button><button id="full">Fullscreen</button></div>
+  <div id="bar" style="display:none"><span>Gang Beasts Browser Reconstruction (incomplete, unofficial)</span><button id="other">Builds</button><button id="full">Fullscreen</button></div>
 </div>
 <script src="fflate.min.js"></script>
 <script>
-// The game files never touch this site. The player loads a release zip; its files go into Cache Storage
-// and sw.js serves them back under ./local/<id>/.
-var CACHE = "gb-releases", RELAY = "gangbeasts.agamer21.kozow.com";
+// No game files live on this site. The newest build is downloaded from the private repo's "play" branch through
+// the GitHub API with the player's own read-only token, unpacked into Cache Storage, and sw.js serves it back under ./local/<id>/.
+var CACHE = "gb-releases", RELAY = "gangbeasts.agamer21.kozow.com", TOKEN_KEY = "gb-github-token";
+var API = "https://api.github.com/repos/AGames21/gang-beasts-browser/contents/";
 var params = new URLSearchParams(location.search);
 var $ = function (id) { return document.getElementById(id); };
 function fail(text) { var m = $("msg"); m.textContent = text; m.style.display = "block"; }
+function error(text) { var m = $("error"); m.textContent = text; m.style.display = text ? "block" : "none"; }
 function status(text) { $("status").textContent = text; }
 function local(path) { return new URL("local/" + path, location.href).href; }
+function getToken() { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; } }
+function setToken(t) { try { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); } catch (e) {} }
 
 // Online rooms: the build connects to <page host>/ws, so send it to the home relay instead.
 var NativeWebSocket = window.WebSocket;
@@ -70,7 +91,7 @@ function worker() {
   });
 }
 
-// Saved releases, newest first.
+// Saved builds, newest first.
 function saved() {
   return caches.open(CACHE).then(function (cache) { return cache.keys(); }).then(function (keys) {
     var infos = keys.filter(function (r) { return /\/local\/[a-f0-9]{16}\/release\.json$/.test(r.url); });
@@ -86,13 +107,15 @@ function remove(id) {
   });
 }
 
+function go(id) { params.set("build", id); params.delete("pick"); location.search = params.toString(); }
+
 function showSaved(list) {
   var box = $("saved"); box.textContent = "";
   list.forEach(function (info) {
     var row = document.createElement("div");
     var name = document.createElement("code"); name.textContent = info.id + (info.title ? "  " + info.title : "");
     var play = document.createElement("button"); play.textContent = "Play";
-    play.onclick = function () { params.set("build", info.id); location.search = params.toString(); };
+    play.onclick = function () { go(info.id); };
     var del = document.createElement("button"); del.textContent = "Remove";
     del.onclick = function () { remove(info.id).then(saved).then(showSaved); };
     row.append(name, play, del); box.appendChild(row);
@@ -103,16 +126,17 @@ function unzip(bytes) {
   return new Promise(function (done, reject) { fflate.unzip(bytes, function (err, files) { err ? reject(err) : done(files); }); });
 }
 
-// Accepts the zips from the releases repo: <id>/release.json, <id>/Build/..., <id>/StreamingAssets/...
-function store(file) {
-  status("Reading " + file.name + "...");
-  return file.arrayBuffer().then(function (buf) { status("Unpacking..."); return unzip(new Uint8Array(buf)); }).then(function (files) {
+// Accepts release zips: <id>/release.json, <id>/Build/..., <id>/StreamingAssets/...
+function store(bytes, title) {
+  status("Unpacking...");
+  return unzip(bytes).then(function (files) {
     var names = Object.keys(files).filter(function (n) { return !n.endsWith("/"); });
     var info = names.filter(function (n) { return /^[a-f0-9]{16}\/release\.json$/.test(n); })[0];
     if (!info) throw new Error("That zip is not a Gang Beasts release (no <id>/release.json).");
     var id = info.split("/")[0];
     var meta = JSON.parse(new TextDecoder().decode(files[info]));
     if (meta.id !== id) throw new Error("release.json does not match its folder.");
+    if (title) meta.title = title;
     names = names.filter(function (n) { return n.indexOf(id + "/") === 0 && n.split("/").indexOf("..") < 0 && n !== info; });
     if (names.indexOf(id + "/Build/original-menu-webgl.loader.js") < 0) throw new Error("The zip has no game loader.");
     return remove(id).then(function () { return caches.open(CACHE); }).then(function (cache) {
@@ -132,11 +156,68 @@ function store(file) {
   });
 }
 
-function load(file) {
-  store(file).then(function (id) {
-    if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
-    params.set("build", id); location.search = params.toString();
-  }).catch(function (e) { status(""); fail(e.message || String(e)); });
+function saveDone(id) {
+  if (navigator.storage && navigator.storage.persist) navigator.storage.persist();
+  go(id);
+}
+
+function loadFile(file) {
+  error(""); status("Reading " + file.name + "...");
+  file.arrayBuffer().then(function (buf) { return store(new Uint8Array(buf)); }).then(saveDone)
+    .catch(function (e) { status(""); error(e.message || String(e)); });
+}
+
+// GitHub API: raw file contents from the private repo's play branch (files up to 100 MB).
+function github(path, token) {
+  return fetch(API + path + "?ref=play", { headers: { Authorization: "Bearer " + token, Accept: "application/vnd.github.raw" }, cache: "no-store" }).then(function (r) {
+    if (r.ok) return r;
+    if (r.status === 401) throw Object.assign(new Error("GitHub did not accept that key (wrong or expired). Make a new one."), { badToken: true });
+    if (r.status === 403 || r.status === 404) throw Object.assign(new Error("That key cannot read gang-beasts-browser. Give it access to that repo with Contents: Read-only."), { badToken: true });
+    throw new Error("GitHub answered " + r.status + " for " + path + ".");
+  });
+}
+
+function download(latest, token) {
+  status("Downloading build " + latest.id + "...");
+  $("dl").style.display = "block";
+  return github(latest.zip, token).then(function (r) {
+    var total = Number(r.headers.get("Content-Length")) || latest.size || 0;
+    if (!r.body || !r.body.getReader) return r.arrayBuffer().then(function (b) { return new Uint8Array(b); });
+    var reader = r.body.getReader(), parts = [], got = 0;
+    function pump() {
+      return reader.read().then(function (step) {
+        if (step.done) return;
+        parts.push(step.value); got += step.value.length;
+        if (total) { $("dlfill").style.width = Math.min(100, 100 * got / total) + "%"; status("Downloading build " + latest.id + ": " + Math.round(got / 1048576) + " / " + Math.round(total / 1048576) + " MB"); }
+        return pump();
+      });
+    }
+    return pump().then(function () {
+      var bytes = new Uint8Array(got), at = 0;
+      parts.forEach(function (p) { bytes.set(p, at); at += p.length; });
+      return bytes;
+    });
+  }).then(function (bytes) {
+    if (latest.size && bytes.length !== latest.size) throw new Error("The download was cut short. Reload to try again.");
+    return store(bytes, latest.title);
+  });
+}
+
+// Newest build from GitHub; returns its id once it is saved here (null when GitHub cannot be reached).
+function update(list, token) {
+  status("Checking GitHub for the newest build...");
+  return github("builds/latest.json", token).then(function (r) { return r.json(); }).then(function (latest) {
+    if (list.some(function (r) { return r.id === latest.id; })) return latest.id;
+    return download(latest, token).then(function (id) {
+      // Drop older downloaded builds so the browser keeps only one 200 MB copy.
+      return Promise.all(list.map(function (r) { return remove(r.id); })).then(function () { return id; });
+    });
+  });
+}
+
+function askToken(why) {
+  $("signin").style.display = "block"; status(""); error(why || "");
+  $("token").focus();
 }
 
 function play(id) {
@@ -146,7 +227,7 @@ function play(id) {
   canvas.addEventListener("contextmenu", function (e) { e.preventDefault(); });
   var script = document.createElement("script");
   script.src = base + "/Build/original-menu-webgl.loader.js";
-  script.onerror = function () { fail("The saved release is missing its loader. Load the zip again."); };
+  script.onerror = function () { fail("The saved build is missing its loader. Use Builds, Remove it, and reload."); };
   script.onload = function () {
     createUnityInstance(canvas, {
       dataUrl: base + "/Build/original-menu-webgl.data",
@@ -169,20 +250,43 @@ function play(id) {
   document.body.appendChild(script);
 }
 
+function start(list) {
+  showSaved(list);
+  var want = params.get("build");
+  if (params.has("pick") && !getToken()) askToken();
+  if (want) {
+    if (list.some(function (r) { return r.id === want; }) && !params.has("pick")) return play(want);
+    if (!params.has("pick")) status("Build " + want + " is not saved in this browser.");
+    return;
+  }
+  if (params.has("pick")) return;
+  var token = getToken();
+  if (!token) { if (list[0]) return play(list[0].id); return askToken(); }
+  update(list, token).then(function (id) { play(id); }).catch(function (e) {
+    $("dl").style.display = "none";
+    if (e.badToken) { setToken(""); return askToken(e.message); }
+    // Offline or GitHub down: play what is already here.
+    if (list[0]) return play(list[0].id);
+    status(""); error(e.message || String(e));
+  });
+}
+
+$("save").onclick = function () {
+  var t = $("token").value.trim();
+  if (!t) return;
+  setToken(t); $("token").value = ""; $("signin").style.display = "none"; error("");
+  saved().then(start);
+};
+$("token").onkeydown = function (e) { if (e.key === "Enter") $("save").click(); };
+$("forget").onclick = function () { setToken(""); askToken("Key forgotten. The saved build stays until you remove it."); };
 $("other").onclick = function () { params.set("pick", ""); location.search = params.toString(); };
-$("pick").onchange =function () { if (this.files[0]) load(this.files[0]); };
+$("pick").onchange = function () { if (this.files[0]) loadFile(this.files[0]); };
 var zone = $("loader");
 zone.ondragover = function (e) { e.preventDefault(); zone.classList.add("over"); };
 zone.ondragleave = function () { zone.classList.remove("over"); };
-zone.ondrop = function (e) { e.preventDefault(); zone.classList.remove("over"); if (e.dataTransfer.files[0]) load(e.dataTransfer.files[0]); };
+zone.ondrop = function (e) { e.preventDefault(); zone.classList.remove("over"); if (e.dataTransfer.files[0]) loadFile(e.dataTransfer.files[0]); };
 
-worker().then(saved).then(function (list) {
-  showSaved(list);
-  var want = params.get("build");
-  var pick = list.filter(function (r) { return r.id === want; })[0] || (want ? null : list[0]);
-  if (want && !pick) status("Release " + want + " is not saved in this browser. Load its zip.");
-  if (pick && !params.has("pick")) play(pick.id);
-}).catch(function (e) { fail(e.message || String(e)); });
+worker().then(saved).then(start).catch(function (e) { error(e.message || String(e)); });
 </script>
 </body>
 </html>
